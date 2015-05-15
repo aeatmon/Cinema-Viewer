@@ -17,7 +17,8 @@ import IO.cinema_store
 #open up a store
 with open(sys.argv[1], mode="rb") as file:
     info_json = json.load(file)
-if info_json.has_key("store_type") and info_json["store_type"] == "SFS":
+md = info_json["metadata"]
+if md.has_key("store_type") and md["store_type"] == "SFS":
     cs = IO.cinema_store.SingleFileStore(sys.argv[1])
 else:
     cs = IO.cinema_store.FileStore(sys.argv[1])
