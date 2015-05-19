@@ -2,8 +2,8 @@ from PySide import QtCore
 from PySide.QtCore import *
 from PySide.QtGui import *
 
-import PIL.ImageFile
-import numpy
+import numpy as np
+import PIL
 
 from QRenderView import *
 from RenderViewMouseInteractor import *
@@ -31,6 +31,8 @@ class MainWindow(QMainWindow):
 
         layout = QVBoxLayout()
         self._parametersWidget.setLayout(layout)
+
+        self._dependent_widgets = {}
 
         self.createMenus()
 
@@ -63,9 +65,8 @@ class MainWindow(QMainWindow):
             self._connectMouseSignals()
 
         # Display the default image
-        cq, ignored = self._getCQ()
-        doc = self._store.find(cq).next()
-        self.displayDocument(doc)
+        self.render()
+        # Make the GUI
         self._createParameterUI()
 
     # Disconnect mouse signals
@@ -189,8 +190,9 @@ class MainWindow(QMainWindow):
         # Configure the slider
         self.configureSlider(slider, properties)
         self._updateSlider(properties['label'], properties['default'])
+        return controlsWidget
 
-    # Create a slider for a 'range' parameter
+    # Create a slider for a 'list' parameter
     def _createListPulldown(self, name, properties):
         labelValueWidget = QWidget(self)
         labelValueWidget.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
@@ -220,8 +222,9 @@ class MainWindow(QMainWindow):
             menu.addItem(str(entry))
         menu.setCurrentIndex(found)
         menu.currentIndexChanged.connect(self.onChosen)
+        return controlsWidget
 
-    # Create a slider for a 'range' parameter
+    # Create a slider for an 'option' parameter
     def _createOptionCheckbox(self, name, properties):
         labelValueWidget = QWidget(self)
         labelValueWidget.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
@@ -249,27 +252,64 @@ class MainWindow(QMainWindow):
 
            cb.stateChanged.connect(self.onChecked)
            controlsWidget.layout().addWidget(cb)
+        return controlsWidget
 
     # Create property UI
     def _createParameterUI(self):
         keys = sorted(self._store.parameter_list)
+        dependencies = self._store.parameter_associations
+        self.depwidgets = {}
+
         for name in keys:
             properties = self._store.parameter_list[name]
+            widget = None
+
             if len(properties['values']) == 1:
                 #don't have widget if no choice possible
                 continue
 
             if properties['type'] == 'range':
-                self._createRangeSlider(name, properties)
+                widget = self._createRangeSlider(name, properties)
 
             if properties['type'] == 'list':
-                #TODO: should be a pulldown menu
-                self._createListPulldown(name, properties)
+                widget = self._createListPulldown(name, properties)
 
             if properties['type'] == 'option':
-                self._createOptionCheckbox(name, properties)
+                widget = self._createOptionCheckbox(name, properties)
+
+            if properties['type'] == 'hidden':
+                continue
+
+            if widget and name in dependencies:
+                widget.setEnabled(False)
+                self._dependent_widgets[name] = widget
 
         self._parametersWidget.layout().addStretch()
+        self._updateDependentWidgets()
+
+    # Update enable state of all dependent widgets
+    # Current logic says enable the depender if ANY of its dependees
+    # are have a state that the depender likes.
+    def _updateDependentWidgets(self):
+        dependencies = self._store.parameter_associations
+        cq, dq, opts = self._getCurrentQuery()
+        for name, widget in self._dependent_widgets.iteritems():
+            ok = False
+            for parent, okvals in dependencies[name].iteritems():
+                if parent in cq:
+                    val = cq[parent]
+                    if val in okvals:
+                        ok = True
+                if parent in opts:
+                    vals = opts[parent]
+                    for x in vals:
+                        if x in okvals:
+                            ok = True
+            if ok:
+                widget.setEnabled(True)
+            else:
+                widget.setEnabled(False)
+
 
     # Convenience function for setting up a slider
     def configureSlider(self, slider, properties):
@@ -294,6 +334,8 @@ class MainWindow(QMainWindow):
         # Update value label
         valueLabel = self._parametersWidget.findChild(QLabel, parameterName + "ValueLabel")
         valueLabel.setText(self._formatText(parameterValue))
+
+        self._updateDependentWidgets()
         self.render()
 
     # Respond to a combobox change
@@ -302,6 +344,8 @@ class MainWindow(QMainWindow):
         pl = self._store.parameter_list
         parameterValue = pl[parameterName]['values'][index]
         self._currentQuery[parameterName] = parameterValue
+
+        self._updateDependentWidgets()
         self.render()
 
     # Respond to a checkbox change
@@ -314,6 +358,8 @@ class MainWindow(QMainWindow):
         else:
             currentValues.remove(str(parameterValue))
         self._currentQuery[parameterName] = currentValues
+
+        self._updateDependentWidgets()
         self.render()
 
     # Back up slider all the way to the left
@@ -412,57 +458,118 @@ class MainWindow(QMainWindow):
         self.render()
 
     # separate option types with multiple values out into their own dict
-    def _getCQ(self):
+    def _getCurrentQuery(self):
+        def _isfield(self, n):
+            if ('isfield' in self._store.parameter_list[n] and
+                self._store.parameter_list[n]['isfield'] == 'yes'):
+                return True
+            return False
+        def _islayer(self, n):
+            if ('islayer' in self._store.parameter_list[n] and
+                self._store.parameter_list[n]['islayer'] == 'yes'):
+                #print n, "is a layer"
+                return True
+            #print n, "is not a layer"
+            return False
+        def _getdepender(self, n):
+            for depender, dependees in self._store.parameter_associations.iteritems():
+                if n in dependees:
+                    #print "FOUND DEPENDER", depender
+                    return depender
+            return None
+        def _getcolorvalue(self, n):
+            #print "N",n
+            param = self._store.parameter_list[n]
+            #print "PARAM", param
+            #print "CQ", self._currentQuery
+            v = self._currentQuery[n]
+            #print "FIELD VALUE IS", v
+            return v
+
+        cQuery = dict()
+        dQuery = dict()
         opts = dict()
-        cq = dict()
+        hasLayer = False
         for n,v in self._currentQuery.items():
-            if type(v) == type(set()):
+            if _isfield(self, n):
+                #handle with layer below
+                continue
+            if _islayer(self, n):
                 opts[n] = v
-                v = list(v)
-                if len(v) == 1:
-                    cq[n] = v[0]
+                layern = []
+                fieldname = _getdepender(self, n)
+                colorchoice = _getcolorvalue(self, fieldname)
+                cQuery[fieldname] = colorchoice
+                dQuery[fieldname] = u'depth'
+                hasLayer = True
+                continue
+            if type(v) == type(set()):
+                cQuery[n] = list(v)[0] #other than for layers/fields we don't know how to do these
+                dQuery[n] = list(v)[0]
             else:
-                cq[n] = v
-        return cq, opts
+                cQuery[n] = v
+                dQuery[n] = v
+        #print "CQ", cQuery
+        #print "DQ", dQuery
+        if not hasLayer:
+            dQuery = dict()
+        return cQuery, dQuery, opts
 
     # Query the image store and display the retrieved image
     def render(self):
-        # Retrieve image from data store with the current query. Only
-        # care about the first - there should be only one if we have
-        # correctly specified all the properties.
-        cq, opts = self._getCQ()
+        # Retrieve image from data store with the current query.
+        cq, dq, opts = self._getCurrentQuery()
         docs = [doc for doc in self._store.find(cq)]
-        found = False
+        ddocs = [doc for doc in self._store.find(dq)]
+        layers = [] #will have the color and depth information for each layer selected
         if len(docs) > 0:
-            if len(opts) == 0:
-                found = True
-                self.displayDocument(docs[0])
-            for doc in docs:
+            for dix in range(0,len(docs)):
+                doc = docs[dix]
+                ddoc = ddocs[dix]
                 for n, vs in opts.items():
                     if doc.descriptor[n] in vs:
-                        found = True
-                        self.displayDocument(doc)
-        if not found:
-            self._displayWidget.setPixmap(None)
-            self._displayWidget.setAlignment(Qt.AlignCenter)
+                        layers.append(doc)
+                        layers.append(ddoc)
+                    else:
+                        pass
+
+        if len(layers) == 0 and len(dq) == 0:
+            layers.append(docs[0])
+
+        self.displayDocument(layers)
 
     # Get the main widget
     def mainWidget(self):
         return self._mainWidget
 
     # Given a document, read the data into an image that can be displayed in Qt
-    def displayDocument(self, doc):
+    def displayDocument(self, layers):
 
-        if doc.data == None:
+        #print layers
+        if len(layers) == 0 or layers[0] == None or layers[0].data == None:
+            self._displayWidget.setPixmap(None)
+            self._displayWidget.setAlignment(Qt.AlignCenter)
             return
 
-        pimg = PIL.Image.fromarray(doc.data)
+        c0 = np.copy(layers[0].data)
+
+        d0 = None
+        if len(layers)>1:
+            d0 = np.copy(layers[1].data)
+
+        # composite in the rest of the layers, picking color of nearest pixel
+        for idx in range(2,len(layers),2):
+            cnext = layers[idx].data
+            dnext = layers[idx+1].data
+            indxarray = np.where(dnext<d0)
+            c0[indxarray[0],indxarray[1],:] = cnext[indxarray[0],indxarray[1],:]
+            d0[indxarray[0],indxarray[1],:] = dnext[indxarray[0],indxarray[1],:]
+
+        pimg = PIL.Image.fromarray(c0)
         imageString = pimg.tostring('raw', 'RGB')
         qimg = QImage(imageString, pimg.size[0], pimg.size[1], QImage.Format_RGB888)
-
         pix = QPixmap.fromImage(qimg)
 
         # Try to resize the display widget
         self._displayWidget.sizeHint = pix.size
-
         self._displayWidget.setPixmap(pix)
