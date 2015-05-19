@@ -2,11 +2,9 @@
 #!/usr/bin/python
 
 # Import PySide classes
-import sys
 from PySide.QtCore import *
 from PySide.QtGui import *
 from PySide.QtUiTools import *
-import json
 
 # import Python Image Library
 import PIL.ImageFile
@@ -14,17 +12,22 @@ import PIL.ImageFile
 # Import cinema IO
 import IO.cinema_store
 
+import sys
+import json
+
 #open up a store
 with open(sys.argv[1], mode="rb") as file:
     info_json = json.load(file)
-md = info_json["metadata"]
-if md.has_key("store_type") and md["store_type"] == "SFS":
-    cs = IO.cinema_store.SingleFileStore(sys.argv[1])
-else:
+storeType = "MFS"
+try:
+    if info_json["metadata"]["store_type"] == "SFS":
+        cs = IO.cinema_store.SingleFileStore(sys.argv[1])
+    else:
+        raise TypeError
+except(TypeError,KeyError):
     cs = IO.cinema_store.FileStore(sys.argv[1])
-cs.load()
 
-aselection = {}
+cs.load()
 
 # Show it in Qt
 app = QApplication(sys.argv)
