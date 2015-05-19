@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout()
         self._parametersWidget.setLayout(layout)
 
+        #keep track of widgets that depend on others for easy updating
         self._dependent_widgets = {}
 
         self.createMenus()
@@ -188,7 +189,15 @@ class MainWindow(QMainWindow):
         controlsWidget.layout().addWidget(playButton)
 
         # Configure the slider
-        self.configureSlider(slider, properties)
+        default   = properties['default']
+        values    = properties['values']
+        typeValue = properties['type']
+        label     = properties['label']
+        slider.setMinimum(0)
+        slider.setMaximum(len(values)-1)
+        slider.setPageStep(1)
+        slider.valueChanged.connect(self.onSliderMoved)
+
         self._updateSlider(properties['label'], properties['default'])
         return controlsWidget
 
@@ -258,7 +267,6 @@ class MainWindow(QMainWindow):
     def _createParameterUI(self):
         keys = sorted(self._store.parameter_list)
         dependencies = self._store.parameter_associations
-        self.depwidgets = {}
 
         for name in keys:
             properties = self._store.parameter_list[name]
@@ -281,6 +289,7 @@ class MainWindow(QMainWindow):
                 continue
 
             if widget and name in dependencies:
+                # disable widgets that depend on settings of others
                 widget.setEnabled(False)
                 self._dependent_widgets[name] = widget
 
@@ -290,9 +299,10 @@ class MainWindow(QMainWindow):
     # Update enable state of all dependent widgets
     # Current logic says enable the depender if ANY of its dependees
     # are have a state that the depender likes.
+    # TODO: doesn't handle recursive dependencies correctly
     def _updateDependentWidgets(self):
         dependencies = self._store.parameter_associations
-        cq, dq, opts = self._getCurrentQuery()
+        cq, ignored, opts = self._getCurrentQuery()
         for name, widget in self._dependent_widgets.iteritems():
             ok = False
             for parent, okvals in dependencies[name].iteritems():
@@ -309,20 +319,6 @@ class MainWindow(QMainWindow):
                 widget.setEnabled(True)
             else:
                 widget.setEnabled(False)
-
-
-    # Convenience function for setting up a slider
-    def configureSlider(self, slider, properties):
-        default   = properties['default']
-        values    = properties['values']
-        typeValue = properties['type']
-        label     = properties['label']
-
-        slider.setMinimum(0)
-        slider.setMaximum(len(values)-1)
-        slider.setPageStep(1)
-
-        slider.valueChanged.connect(self.onSliderMoved)
 
     # Respond to a slider movement
     def onSliderMoved(self):
@@ -457,7 +453,7 @@ class MainWindow(QMainWindow):
 
         self.render()
 
-    # separate option types with multiple values out into their own dict
+    # look at state of all widgesseparate option types with multiple values out into their own dict
     def _getCurrentQuery(self):
         def _isfield(self, n):
             if ('isfield' in self._store.parameter_list[n] and
@@ -504,7 +500,7 @@ class MainWindow(QMainWindow):
                 hasLayer = True
                 continue
             if type(v) == type(set()):
-                cQuery[n] = list(v)[0] #other than for layers/fields we don't know how to do these
+                cQuery[n] = list(v)[0] #TODO: other than for layers/fields we don't know how to do these
                 dQuery[n] = list(v)[0]
             else:
                 cQuery[n] = v
@@ -515,21 +511,28 @@ class MainWindow(QMainWindow):
             dQuery = dict()
         return cQuery, dQuery, opts
 
-    # Query the image store and display the retrieved image
+    # Perform query requested of the UI
+    # retrieve documents that go into the result,
+    # display the retrieved image.
     def render(self):
         # Retrieve image from data store with the current query.
         cq, dq, opts = self._getCurrentQuery()
         docs = [doc for doc in self._store.find(cq)]
-        ddocs = [doc for doc in self._store.find(dq)]
-        layers = [] #will have the color and depth information for each layer selected
+        doComposite = False
+        if len(dq):
+            doComposite = True
+            ddocs = [doc for doc in self._store.find(dq)]
+        layers = [] #ends up with color and depth information for each selected layer
         if len(docs) > 0:
             for dix in range(0,len(docs)):
                 doc = docs[dix]
-                ddoc = ddocs[dix]
+                if doComposite:
+                    ddoc = ddocs[dix]
                 for n, vs in opts.items():
                     if doc.descriptor[n] in vs:
                         layers.append(doc)
-                        layers.append(ddoc)
+                        if doComposite:
+                            layers.append(ddoc)
                     else:
                         pass
 
@@ -538,14 +541,9 @@ class MainWindow(QMainWindow):
 
         self.displayDocument(layers)
 
-    # Get the main widget
-    def mainWidget(self):
-        return self._mainWidget
-
     # Given a document, read the data into an image that can be displayed in Qt
     def displayDocument(self, layers):
 
-        #print layers
         if len(layers) == 0 or layers[0] == None or layers[0].data == None:
             self._displayWidget.setPixmap(None)
             self._displayWidget.setAlignment(Qt.AlignCenter)
