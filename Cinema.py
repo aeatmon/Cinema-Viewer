@@ -10,7 +10,7 @@ from PySide.QtUiTools import *
 import PIL.ImageFile
 
 # Import cinema IO
-import IO.cinema_store
+from cinema_python import cinema_store
 
 import sys
 import json
@@ -21,11 +21,11 @@ with open(sys.argv[1], mode="rb") as file:
 storeType = "MFS"
 try:
     if info_json["metadata"]["store_type"] == "SFS":
-        cs = IO.cinema_store.SingleFileStore(sys.argv[1])
+        cs = cinema_store.SingleFileStore(sys.argv[1])
     else:
         raise TypeError
 except(TypeError,KeyError):
-    cs = IO.cinema_store.FileStore(sys.argv[1])
+    cs = cinema_store.FileStore(sys.argv[1])
 
 cs.load()
 
