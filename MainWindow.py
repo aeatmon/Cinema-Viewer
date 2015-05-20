@@ -298,24 +298,27 @@ class MainWindow(QMainWindow):
 
     # Update enable state of all dependent widgets
     # Current logic says enable the depender if ANY of its dependees
-    # are have a state that the depender likes.
+    # have a state that the depender likes.
     # TODO: doesn't handle recursive dependencies correctly
     def _updateDependentWidgets(self):
-        dependencies = self._store.parameter_associations
-        cq, ignored, opts = self._getCurrentQuery()
-        for name, widget in self._dependent_widgets.iteritems():
-            ok = False
+        def _isavailable(self, name, cq, opts):
+            #TODO: move to store
+            dependencies = self._store.parameter_associations
             for parent, okvals in dependencies[name].iteritems():
                 if parent in cq:
                     val = cq[parent]
                     if val in okvals:
-                        ok = True
+                        return True
                 if parent in opts:
                     vals = opts[parent]
                     for x in vals:
                         if x in okvals:
-                            ok = True
-            if ok:
+                            return True
+            return False
+
+        cq, ignored, opts = self._getCurrentQuery()
+        for name, widget in self._dependent_widgets.iteritems():
+            if _isavailable(self, name, cq, opts):
                 widget.setEnabled(True)
             else:
                 widget.setEnabled(False)
@@ -453,14 +456,19 @@ class MainWindow(QMainWindow):
 
         self.render()
 
-    # look at state of all widgesseparate option types with multiple values out into their own dict
+    # translate state of widgets into queries that the cinema store can handle
+    # also add in any additional queries we need for rendering
+    # ex1, cinema store does not understand options(sets) of values in a query: it is 1 or none
+    # ex2, the user doesn't need to know what fields are required to draw a layer
     def _getCurrentQuery(self):
         def _isfield(self, n):
+            #TODO: move to cinema_store
             if ('isfield' in self._store.parameter_list[n] and
                 self._store.parameter_list[n]['isfield'] == 'yes'):
                 return True
             return False
         def _islayer(self, n):
+            #TODO: move to cinema_store
             if ('islayer' in self._store.parameter_list[n] and
                 self._store.parameter_list[n]['islayer'] == 'yes'):
                 #print n, "is a layer"
@@ -468,6 +476,8 @@ class MainWindow(QMainWindow):
             #print n, "is not a layer"
             return False
         def _getdepender(self, n):
+            #TODO: move to cinema_store
+            #TODO: compute 1x
             for depender, dependees in self._store.parameter_associations.iteritems():
                 if n in dependees:
                     #print "FOUND DEPENDER", depender
@@ -482,8 +492,8 @@ class MainWindow(QMainWindow):
             #print "FIELD VALUE IS", v
             return v
 
-        cQuery = dict()
-        dQuery = dict()
+        cQuery = dict() #color Query
+        dQuery = dict() #depth Query
         opts = dict()
         hasLayer = False
         for n,v in self._currentQuery.items():
