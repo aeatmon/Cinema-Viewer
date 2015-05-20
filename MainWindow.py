@@ -2,6 +2,7 @@ from PySide import QtCore
 from PySide.QtCore import *
 from PySide.QtGui import *
 
+import copy
 import numpy as np
 import PIL
 
@@ -109,13 +110,11 @@ class MainWindow(QMainWindow):
         self._currentQuery = dict()
         dd = self._store.parameter_list
 
-        for name, properties in dd.items():
-            if properties['type'] == 'option':
-                v = set()
-                v.add(str(dd[name]['default']))
-                self._currentQuery[name] = v
-            else:
-                self._currentQuery[name] = dd[name]['default']
+        for name, ignored in dd.items():
+            value = dd[name]['default']
+            s = set()
+            s.add(value)
+            self._currentQuery[name] = s
 
     # Create a slider for a 'range' parameter
     def _createRangeSlider(self, name, properties):
@@ -301,38 +300,42 @@ class MainWindow(QMainWindow):
     # have a state that the depender likes.
     # TODO: doesn't handle recursive dependencies correctly
     def _updateDependentWidgets(self):
-        def _isavailable(self, name, cq, opts):
-            #TODO: move to store
-            dependencies = self._store.parameter_associations
-            for parent, okvals in dependencies[name].iteritems():
-                if parent in cq:
-                    val = cq[parent]
-                    if val in okvals:
-                        return True
-                if parent in opts:
-                    vals = opts[parent]
-                    for x in vals:
-                        if x in okvals:
-                            return True
-            return False
-
-        cq, ignored, opts = self._getCurrentQuery()
-        for name, widget in self._dependent_widgets.iteritems():
-            if _isavailable(self, name, cq, opts):
-                widget.setEnabled(True)
-            else:
-                widget.setEnabled(False)
+        #
+        #def _isavailable(self, name, cq, opts):
+        #    #TODO: move to store
+        #    dependencies = self._store.parameter_associations
+        #    for parent, okvals in dependencies[name].iteritems():
+        #        if parent in cq:
+        #            val = cq[parent]
+        #            if val in okvals:
+        #                return True
+        #        if parent in opts:
+        #            vals = opts[parent]
+        #            for x in vals:
+        #                if x in okvals:
+        #                    return True
+        #    return False
+        #
+        #cq, ignored, opts = self._getCurrentQuery()
+        #for name, widget in self._dependent_widgets.iteritems():
+        #    if _isavailable(self, name, cq, opts):
+        #        widget.setEnabled(True)
+        #    else:
+        #        widget.setEnabled(False)
+        pass
 
     # Respond to a slider movement
     def onSliderMoved(self):
         parameterName = self.sender().objectName()
         sliderIndex = self.sender().value()
         pl = self._store.parameter_list
-        parameterValue = pl[parameterName]['values'][sliderIndex]
-        self._currentQuery[parameterName] = parameterValue
+        value = pl[parameterName]['values'][sliderIndex]
+        s = set()
+        s.add(value)
+        self._currentQuery[parameterName] = s
         # Update value label
         valueLabel = self._parametersWidget.findChild(QLabel, parameterName + "ValueLabel")
-        valueLabel.setText(self._formatText(parameterValue))
+        valueLabel.setText(self._formatText(value))
 
         self._updateDependentWidgets()
         self.render()
@@ -341,8 +344,10 @@ class MainWindow(QMainWindow):
     def onChosen(self, index):
         parameterName = self.sender().objectName()
         pl = self._store.parameter_list
-        parameterValue = pl[parameterName]['values'][index]
-        self._currentQuery[parameterName] = parameterValue
+        value = pl[parameterName]['values'][index]
+        s = set()
+        s.add(value)
+        self._currentQuery[parameterName] = s
 
         self._updateDependentWidgets()
         self.render()
@@ -431,8 +436,8 @@ class MainWindow(QMainWindow):
 
     # Initialize the angles for the camera
     def _initializeCamera(self):
-        self._mouseInteractor.setPhi(self._currentQuery['phi'])
-        self._mouseInteractor.setTheta(self._currentQuery['theta'])
+        self._mouseInteractor.setPhi(next(iter(self._currentQuery['phi'])))
+        self._mouseInteractor.setTheta(next(iter(self._currentQuery['theta'])))
 
     # Update the camera angle
     def _updateCamera(self):
@@ -441,10 +446,14 @@ class MainWindow(QMainWindow):
         theta = self._mouseInteractor.getTheta()
 
         if ('phi' in self._currentQuery):
-            self._currentQuery['phi']   = phi
+            s = set()
+            s.add(phi)
+            self._currentQuery['phi']   = s
 
         if ('theta' in self._currentQuery):
-            self._currentQuery['theta'] = theta
+            s = set()
+            s.add(phi)
+            self._currentQuery['theta'] = s
 
         # Update the sliders for phi and theta
         self._updateSlider('phi', phi)
@@ -455,6 +464,85 @@ class MainWindow(QMainWindow):
         self._displayWidget.scale(scale, scale)
 
         self.render()
+
+    # Perform query requested of the UI
+    # retrieve documents that go into the result,
+    # display the retrieved image.
+    def render(self):
+        # translate GUI choices (self._currentQuery) into a set of queries
+        # that we need to render with
+
+        def _isfield(self, n):
+            #TODO: move to cinema_store
+            if ('isfield' in self._store.parameter_list[n] and
+                self._store.parameter_list[n]['isfield'] == 'yes'):
+                return True
+            return False
+
+        print "------+"
+        dd = self._store.parameter_list
+        print dd
+        queries = []
+        queries.append(dict())
+        for name, parameter in dd.iteritems():
+            newqueries = []
+            print name
+            if _isfield(self,name):
+                qcopy = copy.deepcopy(queries)
+                for q in qcopy:
+                    q[name] = u'red'
+                    newqueries.append(q)
+                    qc = copy.deepcopy(q)
+                    qc[name] = u'depth'
+                    newqueries.append(qc)
+                print "FIELD", newqueries
+            else:
+                values = self._currentQuery[name]
+                for v in values:
+                    qcopy = copy.deepcopy(queries)
+                    for q in qcopy:
+                        if True:#(name is compatible with q)
+                            q[name] = v
+                        newqueries.append(q)
+                print "VARIABLE", newqueries
+            queries = newqueries
+
+        print "-------"
+        print queries
+
+        layers = []
+        for q in queries:
+            layers.extend([doc for doc in self._store.find(q)])
+
+        print layers
+        #render, by iterating through the layers, rendering each ontop and continuing
+        if len(layers) == 0:
+            self._displayWidget.setPixmap(None)
+            self._displayWidget.setAlignment(Qt.AlignCenter)
+            return
+
+        c0 = np.copy(layers[0].data)
+        d0 = None
+        if len(layers)>1:
+            d0 = np.copy(layers[1].data)
+
+        # composite in the rest of the layers, picking color of nearest pixel
+        for idx in range(2,len(layers),2):
+            cnext = layers[idx].data
+            dnext = layers[idx+1].data
+            indxarray = np.where(dnext<d0)
+            c0[indxarray[0],indxarray[1],:] = cnext[indxarray[0],indxarray[1],:]
+            d0[indxarray[0],indxarray[1],:] = dnext[indxarray[0],indxarray[1],:]
+
+        # show the result
+        pimg = PIL.Image.fromarray(c0)
+        imageString = pimg.tostring('raw', 'RGB')
+        qimg = QImage(imageString, pimg.size[0], pimg.size[1], QImage.Format_RGB888)
+        pix = QPixmap.fromImage(qimg)
+
+        # Try to resize the display widget
+        self._displayWidget.sizeHint = pix.size
+        self._displayWidget.setPixmap(pix)
 
     # translate state of widgets into queries that the cinema store can handle
     # also add in any additional queries we need for rendering
@@ -520,36 +608,6 @@ class MainWindow(QMainWindow):
         if not hasLayer:
             dQuery = dict()
         return cQuery, dQuery, opts
-
-    # Perform query requested of the UI
-    # retrieve documents that go into the result,
-    # display the retrieved image.
-    def render(self):
-        # Retrieve image from data store with the current query.
-        cq, dq, opts = self._getCurrentQuery()
-        docs = [doc for doc in self._store.find(cq)]
-        doComposite = False
-        if len(dq):
-            doComposite = True
-            ddocs = [doc for doc in self._store.find(dq)]
-        layers = [] #ends up with color and depth information for each selected layer
-        if len(docs) > 0:
-            for dix in range(0,len(docs)):
-                doc = docs[dix]
-                if doComposite:
-                    ddoc = ddocs[dix]
-                for n, vs in opts.items():
-                    if doc.descriptor[n] in vs:
-                        layers.append(doc)
-                        if doComposite:
-                            layers.append(ddoc)
-                    else:
-                        pass
-
-        if len(layers) == 0 and len(dq) == 0:
-            layers.append(docs[0])
-
-        self.displayDocument(layers)
 
     # Given a document, read the data into an image that can be displayed in Qt
     def displayDocument(self, layers):
