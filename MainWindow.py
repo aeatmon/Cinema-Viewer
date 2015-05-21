@@ -519,36 +519,42 @@ class MainWindow(QMainWindow):
                 hasLayer = True
                 values = self._currentQuery[name]
                 for v in values:
+                    fields = []
                     qcopy = copy.deepcopy(base_query)
                     qcopy[name] = v
                     qcopy[fieldname] = colorchoice
-                    queries.append(qcopy)
+                    fields.append(qcopy)
                     qcopy = copy.deepcopy(base_query)
                     qcopy[name] = v
                     qcopy[fieldname] = u'depth'
-                    queries.append(qcopy)
+                    fields.append(qcopy)
+                    queries.append(fields)
         if not hasLayer:
-            queries.append(base_query)
+            queries.append([base_query])
+        #print queries
 
         #send queries to the store to obtain images
-        layers = []
-        for q in queries:
-            layers.extend([doc for doc in self._store.find(q)])
+        for l in range(0,len(queries)):
+            for f in range(0,len(queries[l])):
+                queries[l][f] = list(self._store.find(queries[l][f]))[0]
+        layers = queries
+        #print layers
 
-        #render, by iterating through the layers, rendering each ontop and continuing
         if len(layers) == 0:
             self._displayWidget.setPixmap(None)
             self._displayWidget.setAlignment(Qt.AlignCenter)
             return
 
-        c0 = np.copy(layers[0].data)
-        if len(layers)>1:
-            d0 = np.copy(layers[1].data)
+        #render, by iterating through the layers, rendering each ontop and continuing
+        l0 = layers[0]
+        c0 = np.copy(l0[0].data)
+        if len(l0)>1:
+            d0 = np.copy(l0[1].data)
 
         # composite in the rest of the layers, picking color of nearest pixel
-        for idx in range(2,len(layers),2):
-            cnext = layers[idx].data
-            dnext = layers[idx+1].data
+        for idx in range(1,len(layers)):
+            cnext = layers[idx][0].data
+            dnext = layers[idx][1].data
             indxarray = np.where(dnext<d0)
             c0[indxarray[0],indxarray[1],:] = cnext[indxarray[0],indxarray[1],:]
             d0[indxarray[0],indxarray[1],:] = dnext[indxarray[0],indxarray[1],:]
