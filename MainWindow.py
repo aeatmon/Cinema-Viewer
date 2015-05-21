@@ -278,14 +278,15 @@ class MainWindow(QMainWindow):
             if properties['type'] == 'range':
                 widget = self._createRangeSlider(name, properties)
 
-            if properties['type'] == 'list':
+            if (properties['type'] == 'list' or
+                ('isfield' in properties and properties['isfield'] == 'yes')):
                 widget = self._createListPulldown(name, properties)
 
             if properties['type'] == 'option':
                 widget = self._createOptionCheckbox(name, properties)
 
-            if properties['type'] == 'hidden':
-                continue
+            #if properties['type'] == 'hidden': #disabled for testing fields
+                #continue
 
             if widget and name in dependencies:
                 # disable widgets that depend on settings of others
@@ -297,32 +298,22 @@ class MainWindow(QMainWindow):
 
     # Update enable state of all dependent widgets
     # Current logic says enable the depender if ANY of its dependees
-    # have a state that the depender likes.
+    # have a state that the depender accepts.
     # TODO: doesn't handle recursive dependencies correctly
     def _updateDependentWidgets(self):
-        #
-        #def _isavailable(self, name, cq, opts):
-        #    #TODO: move to store
-        #    dependencies = self._store.parameter_associations
-        #    for parent, okvals in dependencies[name].iteritems():
-        #        if parent in cq:
-        #            val = cq[parent]
-        #            if val in okvals:
-        #                return True
-        #        if parent in opts:
-        #            vals = opts[parent]
-        #            for x in vals:
-        #                if x in okvals:
-        #                    return True
-        #    return False
-        #
-        #cq, ignored, opts = self._getCurrentQuery()
-        #for name, widget in self._dependent_widgets.iteritems():
-        #    if _isavailable(self, name, cq, opts):
-        #        widget.setEnabled(True)
-        #    else:
-        #        widget.setEnabled(False)
-        pass
+        def _isavailable(self, name):
+            for dependee, okvals in self._store.parameter_associations[name].iteritems():
+                vals = self._currentQuery[dependee]
+                for v in vals:
+                    if v in okvals:
+                        return True
+            return False
+
+        for name, widget in self._dependent_widgets.iteritems():
+            if _isavailable(self, name):
+                widget.setEnabled(True)
+            else:
+                widget.setEnabled(False)
 
     # Respond to a slider movement
     def onSliderMoved(self):
@@ -472,6 +463,15 @@ class MainWindow(QMainWindow):
         # translate GUI choices (self._currentQuery) into a set of queries
         # that we need to render with
 
+        def _islayer(self, n):
+            #TODO: move to cinema_store
+            if ('islayer' in self._store.parameter_list[n] and
+                self._store.parameter_list[n]['islayer'] == 'yes'):
+                #print n, "is a layer"
+                return True
+            #print n, "is not a layer"
+            return False
+
         def _isfield(self, n):
             #TODO: move to cinema_store
             if ('isfield' in self._store.parameter_list[n] and
@@ -479,42 +479,62 @@ class MainWindow(QMainWindow):
                 return True
             return False
 
-        print "------+"
+        def _isdepender(self, n):
+            #TODO: move to cinema_store
+            if n in self._store.parameter_associations.iteritems():
+                return True
+            return False
+
+        def _getdepender(self, n):
+            #TODO: move to cinema_store
+            #TODO: compute 1x
+            for depender, dependees in self._store.parameter_associations.iteritems():
+                if n in dependees:
+                    #print "FOUND DEPENDER", depender
+                    return depender
+            return None
+
+        def _getcolorvalue(self, n):
+            param = self._store.parameter_list[n]
+            v = list(iter(self._currentQuery[n]))[0]
+            return v
+
         dd = self._store.parameter_list
-        print dd
+
+        #get query for all of the static contents (current, time, camera mostly)
+        base_query = dict()
+        for name in dd.keys():
+            if not _isfield(self,name) and not _islayer(self,name) and not _isdepender(self,name):
+                values = self._currentQuery[name]
+                v = list(iter(values))[0] #"There can be only one."
+                base_query[name] = v
+
+        #add to the above queries for all of the layers (each composed of sequence of field queries)
         queries = []
-        queries.append(dict())
+        hasLayer = False
         for name, parameter in dd.iteritems():
-            newqueries = []
-            print name
-            if _isfield(self,name):
-                qcopy = copy.deepcopy(queries)
-                for q in qcopy:
-                    q[name] = u'red'
-                    newqueries.append(q)
-                    qc = copy.deepcopy(q)
-                    qc[name] = u'depth'
-                    newqueries.append(qc)
-                print "FIELD", newqueries
-            else:
+            if _islayer(self, name):
+                fieldname = _getdepender(self, name)
+                colorchoice = _getcolorvalue(self, fieldname)
+                hasLayer = True
                 values = self._currentQuery[name]
                 for v in values:
-                    qcopy = copy.deepcopy(queries)
-                    for q in qcopy:
-                        if True:#(name is compatible with q)
-                            q[name] = v
-                        newqueries.append(q)
-                print "VARIABLE", newqueries
-            queries = newqueries
+                    qcopy = copy.deepcopy(base_query)
+                    qcopy[name] = v
+                    qcopy[fieldname] = colorchoice
+                    queries.append(qcopy)
+                    qcopy = copy.deepcopy(base_query)
+                    qcopy[name] = v
+                    qcopy[fieldname] = u'depth'
+                    queries.append(qcopy)
+        if not hasLayer:
+            queries.append(base_query)
 
-        print "-------"
-        print queries
-
+        #send queries to the store to obtain images
         layers = []
         for q in queries:
             layers.extend([doc for doc in self._store.find(q)])
 
-        print layers
         #render, by iterating through the layers, rendering each ontop and continuing
         if len(layers) == 0:
             self._displayWidget.setPixmap(None)
@@ -522,7 +542,6 @@ class MainWindow(QMainWindow):
             return
 
         c0 = np.copy(layers[0].data)
-        d0 = None
         if len(layers)>1:
             d0 = np.copy(layers[1].data)
 
@@ -535,102 +554,6 @@ class MainWindow(QMainWindow):
             d0[indxarray[0],indxarray[1],:] = dnext[indxarray[0],indxarray[1],:]
 
         # show the result
-        pimg = PIL.Image.fromarray(c0)
-        imageString = pimg.tostring('raw', 'RGB')
-        qimg = QImage(imageString, pimg.size[0], pimg.size[1], QImage.Format_RGB888)
-        pix = QPixmap.fromImage(qimg)
-
-        # Try to resize the display widget
-        self._displayWidget.sizeHint = pix.size
-        self._displayWidget.setPixmap(pix)
-
-    # translate state of widgets into queries that the cinema store can handle
-    # also add in any additional queries we need for rendering
-    # ex1, cinema store does not understand options(sets) of values in a query: it is 1 or none
-    # ex2, the user doesn't need to know what fields are required to draw a layer
-    def _getCurrentQuery(self):
-        def _isfield(self, n):
-            #TODO: move to cinema_store
-            if ('isfield' in self._store.parameter_list[n] and
-                self._store.parameter_list[n]['isfield'] == 'yes'):
-                return True
-            return False
-        def _islayer(self, n):
-            #TODO: move to cinema_store
-            if ('islayer' in self._store.parameter_list[n] and
-                self._store.parameter_list[n]['islayer'] == 'yes'):
-                #print n, "is a layer"
-                return True
-            #print n, "is not a layer"
-            return False
-        def _getdepender(self, n):
-            #TODO: move to cinema_store
-            #TODO: compute 1x
-            for depender, dependees in self._store.parameter_associations.iteritems():
-                if n in dependees:
-                    #print "FOUND DEPENDER", depender
-                    return depender
-            return None
-        def _getcolorvalue(self, n):
-            #print "N",n
-            param = self._store.parameter_list[n]
-            #print "PARAM", param
-            #print "CQ", self._currentQuery
-            v = self._currentQuery[n]
-            #print "FIELD VALUE IS", v
-            return v
-
-        cQuery = dict() #color Query
-        dQuery = dict() #depth Query
-        opts = dict()
-        hasLayer = False
-        for n,v in self._currentQuery.items():
-            if _isfield(self, n):
-                #handle with layer below
-                continue
-            if _islayer(self, n):
-                opts[n] = v
-                layern = []
-                fieldname = _getdepender(self, n)
-                colorchoice = _getcolorvalue(self, fieldname)
-                cQuery[fieldname] = colorchoice
-                dQuery[fieldname] = u'depth'
-                hasLayer = True
-                continue
-            if type(v) == type(set()):
-                cQuery[n] = list(v)[0] #TODO: other than for layers/fields we don't know how to do these
-                dQuery[n] = list(v)[0]
-            else:
-                cQuery[n] = v
-                dQuery[n] = v
-        #print "CQ", cQuery
-        #print "DQ", dQuery
-        if not hasLayer:
-            dQuery = dict()
-        return cQuery, dQuery, opts
-
-    # Given a document, read the data into an image that can be displayed in Qt
-    def displayDocument(self, layers):
-
-        if len(layers) == 0 or layers[0] == None or layers[0].data == None:
-            self._displayWidget.setPixmap(None)
-            self._displayWidget.setAlignment(Qt.AlignCenter)
-            return
-
-        c0 = np.copy(layers[0].data)
-
-        d0 = None
-        if len(layers)>1:
-            d0 = np.copy(layers[1].data)
-
-        # composite in the rest of the layers, picking color of nearest pixel
-        for idx in range(2,len(layers),2):
-            cnext = layers[idx].data
-            dnext = layers[idx+1].data
-            indxarray = np.where(dnext<d0)
-            c0[indxarray[0],indxarray[1],:] = cnext[indxarray[0],indxarray[1],:]
-            d0[indxarray[0],indxarray[1],:] = dnext[indxarray[0],indxarray[1],:]
-
         pimg = PIL.Image.fromarray(c0)
         imageString = pimg.tostring('raw', 'RGB')
         qimg = QImage(imageString, pimg.size[0], pimg.size[1], QImage.Format_RGB888)
