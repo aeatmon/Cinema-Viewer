@@ -5,7 +5,7 @@ from PySide.QtGui import *
 import copy
 import numpy as np
 import PIL
-
+import LayerSpec
 from QRenderView import *
 from RenderViewMouseInteractor import *
 
@@ -224,10 +224,16 @@ class MainWindow(QMainWindow):
         controlsWidget.layout().addWidget(menu);
 
         found = -1
-        for entry in properties['values']:
+        for idx in range(0,len(properties['values'])):
+            entry = properties['values'][idx]
             if entry == properties['default']:
                 found = menu.count()
-            menu.addItem(str(entry))
+            #skip depth images, which we don't render directly
+            if 'types' in properties and properties['types'][idx] == 'depth':
+                pass
+            else:
+                menu.addItem(str(entry))
+
         menu.setCurrentIndex(found)
         menu.currentIndexChanged.connect(self.onChosen)
         return controlsWidget
@@ -335,7 +341,8 @@ class MainWindow(QMainWindow):
     def onChosen(self, index):
         parameterName = self.sender().objectName()
         pl = self._store.parameter_list
-        value = pl[parameterName]['values'][index]
+        value = self.sender().itemText(index) #can't use index directly since menu skips 'depth'
+        #value = pl[parameterName]['values'][index]
         s = set()
         s.add(value)
         self._currentQuery[parameterName] = s
@@ -443,7 +450,7 @@ class MainWindow(QMainWindow):
 
         if ('theta' in self._currentQuery):
             s = set()
-            s.add(phi)
+            s.add(theta)
             self._currentQuery['theta'] = s
 
         # Update the sliders for phi and theta
@@ -479,6 +486,14 @@ class MainWindow(QMainWindow):
                 return True
             return False
 
+        def _gettype(self, n, n2):
+            #TODO: move to cinema_store
+            if 'values' in self._store.parameter_list[n] and n2 in self._store.parameter_list[n]['values']:
+                idx = self._store.parameter_list[n]['values'].index(n2)
+                ret = self._store.parameter_list[n]['types'][idx]
+                return ret
+            return 'rgb'
+
         def _isdepender(self, n):
             #TODO: move to cinema_store
             if n in self._store.parameter_associations.iteritems():
@@ -499,46 +514,56 @@ class MainWindow(QMainWindow):
             v = list(iter(self._currentQuery[n]))[0]
             return v
 
+        def _getfieldsfor(self, n):
+            param = self._store.parameter_list[n]
+            vals = param['values']
+            vals2 = []
+            #return currently selected color AND depth
+            #TODO: when we get more complicated GUI for color and shaders we'll return more
+            for v in vals:
+                if v in self._currentQuery[n]:
+                    vals2.append(v)
+                else:
+                    if 'types' in param:
+                        idx = param['values'].index(v)
+                        if param['types'][idx] == 'depth':
+                            vals2.append(v)
+            return vals2
+
         dd = self._store.parameter_list
 
         #get query for all of the static contents (current, time, camera mostly)
-        base_query = dict()
+        base_query = LayerSpec.LayerSpec()
         for name in dd.keys():
             if not _isfield(self,name) and not _islayer(self,name) and not _isdepender(self,name):
                 values = self._currentQuery[name]
-                v = list(iter(values))[0] #"There can be only one."
-                base_query[name] = v
+                v = list(iter(values))[0] #no options in query, so only 1 result not many
+                base_query.addToBaseQuery({name:v})
 
         #add to the above queries for all of the layers (each composed of sequence of field queries)
-        queries = []
+        layers = []
         hasLayer = False
         for name, parameter in dd.iteritems():
             if _islayer(self, name):
-                fieldname = _getdepender(self, name)
-                colorchoice = _getcolorvalue(self, fieldname)
                 hasLayer = True
+                fields_name = _getdepender(self, name)
+                colorcomponents = _getfieldsfor(self,fields_name)
                 values = self._currentQuery[name]
                 for v in values:
                     fields = []
                     qcopy = copy.deepcopy(base_query)
-                    qcopy[name] = v
-                    qcopy[fieldname] = colorchoice
-                    fields.append(qcopy)
-                    qcopy = copy.deepcopy(base_query)
-                    qcopy[name] = v
-                    qcopy[fieldname] = u'depth'
-                    fields.append(qcopy)
-                    queries.append(fields)
+                    qcopy.dict[name] = v
+                    for c in colorcomponents:
+                        img_type = _gettype(self, fields_name, c)
+                        qcopy.addQuery(img_type, fields_name, c)
+                    layers.append(qcopy)
+
         if not hasLayer:
-            queries.append([base_query])
-        #print queries
+            layers.append(base_query)
 
         #send queries to the store to obtain images
-        for l in range(0,len(queries)):
-            for f in range(0,len(queries[l])):
-                queries[l][f] = list(self._store.find(queries[l][f]))[0]
-        layers = queries
-        #print layers
+        for l in range(0,len(layers)):
+            layers[l].loadImages(self._store)
 
         if len(layers) == 0:
             self._displayWidget.setPixmap(None)
@@ -547,17 +572,16 @@ class MainWindow(QMainWindow):
 
         #render, by iterating through the layers, rendering each ontop and continuing
         l0 = layers[0]
-        c0 = np.copy(l0[0].data)
-        if len(l0)>1:
-            d0 = np.copy(l0[1].data)
-
-        # composite in the rest of the layers, picking color of nearest pixel
-        for idx in range(1,len(layers)):
-            cnext = layers[idx][0].data
-            dnext = layers[idx][1].data
-            indxarray = np.where(dnext<d0)
-            c0[indxarray[0],indxarray[1],:] = cnext[indxarray[0],indxarray[1],:]
-            d0[indxarray[0],indxarray[1],:] = dnext[indxarray[0],indxarray[1],:]
+        c0 = np.copy(l0.getColor1()) #TODO: apply frag shader to derive color from values
+        if hasLayer:
+            d0 = np.copy(l0.getDepth())
+            # composite in the rest of the layers, picking color of nearest pixel
+            for idx in range(1,len(layers)):
+                cnext = layers[idx].getColor1()
+                dnext = layers[idx].getDepth()
+                indxarray = np.where(dnext<d0)
+                c0[indxarray[0],indxarray[1],:] = cnext[indxarray[0],indxarray[1],:]
+                d0[indxarray[0],indxarray[1],:] = dnext[indxarray[0],indxarray[1],:]
 
         # show the result
         pimg = PIL.Image.fromarray(c0)
