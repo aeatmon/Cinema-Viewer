@@ -2,6 +2,7 @@ from PySide import QtCore
 from PySide.QtCore import *
 from PySide.QtGui import *
 
+import itertools
 import copy
 import numpy as np
 import PIL
@@ -229,7 +230,7 @@ class MainWindow(QMainWindow):
             if entry == properties['default']:
                 found = menu.count()
             #skip depth images, which we don't render directly
-            if 'types' in properties and properties['types'][idx] == 'depth':
+            if self._store.determine_type({name: entry}) == 'Z':
                 pass
             else:
                 menu.addItem(str(entry))
@@ -302,21 +303,28 @@ class MainWindow(QMainWindow):
         self._parametersWidget.layout().addStretch()
         self._updateDependentWidgets()
 
-    # Update enable state of all dependent widgets
-    # Current logic says enable the depender if ANY of its dependees
-    # have a state that the depender accepts.
-    # TODO: doesn't handle recursive dependencies correctly
-    def _updateDependentWidgets(self):
-        def _isavailable(self, name):
-            for dependee, okvals in self._store.parameter_associations[name].iteritems():
-                vals = self._currentQuery[dependee]
-                for v in vals:
-                    if v in okvals:
-                        return True
-            return False
+    def _dependencies_satisfied(self, name):
+        #translate the sets we use for parameters of the query
+        #then call the same named method on the store
+        #TODO: using sets for everything to do options maybe make the store support it
 
+        #check ALL combinations of options
+        params = []
+        values = []
+        for name,vs in self._currentQuery.iteritems():
+            params.append(name)
+            values.append(vs)
+        for element in itertools.product(*values):
+            q = dict(itertools.izip(params, element))
+            if self._store.dependencies_satisfied(name, q):
+                return True
+
+        return False
+
+    # Update enable state of all dependent widgets
+    def _updateDependentWidgets(self):
         for name, widget in self._dependent_widgets.iteritems():
-            if _isavailable(self, name):
+            if self._dependencies_satisfied(name):
                 widget.setEnabled(True)
             else:
                 widget.setEnabled(False)
@@ -356,9 +364,9 @@ class MainWindow(QMainWindow):
         parameterValue = self.sender().value
         currentValues = self._currentQuery[parameterName]
         if state:
-            currentValues.add(str(parameterValue))
+            currentValues.add(parameterValue)
         else:
-            currentValues.remove(str(parameterValue))
+            currentValues.remove(parameterValue)
         self._currentQuery[parameterName] = currentValues
 
         self._updateDependentWidgets()
@@ -500,20 +508,6 @@ class MainWindow(QMainWindow):
                 return True
             return False
 
-        def _getdepender(self, n):
-            #TODO: move to cinema_store
-            #TODO: compute 1x
-            for depender, dependees in self._store.parameter_associations.iteritems():
-                if n in dependees:
-                    #print "FOUND DEPENDER", depender
-                    return depender
-            return None
-
-        def _getcolorvalue(self, n):
-            param = self._store.parameter_list[n]
-            v = list(iter(self._currentQuery[n]))[0]
-            return v
-
         def _getfieldsfor(self, n):
             param = self._store.parameter_list[n]
             vals = param['values']
@@ -541,21 +535,38 @@ class MainWindow(QMainWindow):
                 base_query.addToBaseQuery({name:v})
 
         #add to the above queries for all of the layers (each composed of sequence of field queries)
+        #algorithm's strategy is to find fields and then back track to get required settings for their layers
+        #todo: this is brutal - find a better way
         layers = []
         hasLayer = False
-        for name, parameter in dd.iteritems():
-            if _islayer(self, name):
+        for fields_name, parameter in dd.iteritems():
+            if _isfield(self, fields_name) and self._dependencies_satisfied(fields_name):
                 hasLayer = True
-                fields_name = _getdepender(self, name)
+                #print "FIELDNAME", fields_name
+                layer_name = next(iter(self._store.parameter_associations[fields_name].keys()))
+                #print "LAYERNAME", layer_name
                 colorcomponents = _getfieldsfor(self,fields_name)
-                values = self._currentQuery[name]
+                #print "COMPONENTS", colorcomponents
+
+                #find setting for layer's parent (if any). ex slice=0.5's parent object=slice
+                #todo: only one level deep on GUI end so far
+                parentQs = []
+                if layer_name in self._store.parameter_associations:
+                    for p, v in self._store.parameter_associations[layer_name].iteritems():
+                        parentQs.append({p:v}) #todo: possible that a layer could have multiple settings
+
+                values = self._currentQuery[layer_name]
                 for v in values:
+                    #print "LAYERSELECTS", layer_name, v
                     fields = []
                     qcopy = copy.deepcopy(base_query)
-                    qcopy.dict[name] = v
+                    for i in parentQs:
+                        qcopy.addToBaseQuery(i)
+                    qcopy.dict[layer_name] = v
                     for c in colorcomponents:
-                        img_type = _gettype(self, fields_name, c)
+                        img_type = self._store.determine_type({fields_name: c})
                         qcopy.addQuery(img_type, fields_name, c)
+                        #print "F", fields_name, c
                     layers.append(qcopy)
 
         if not hasLayer:

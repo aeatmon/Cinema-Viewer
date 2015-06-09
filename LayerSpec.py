@@ -68,14 +68,14 @@ class LayerSpec(object):
                 #print "Q", query
                 img = list(store.find(query))[0].data
                 #print "I", img
-                if f == 'rgb':
+                if f == 'RGB':
                     #print "ADD RGB"
                     self.addColor(img)
-                elif f == 'depth':
+                elif f == 'Z':
                     #print "ADD DEPTH"
                     self.setDepth(img)
-                elif f == 'value':
+                elif f == 'VALUE':
                     #print "ADD VALUES"
                     self.addColor(img) #TODO: change to addValues when renderer can handle
-                elif f == 'luminance':
+                elif f == 'LUMINANCE':
                     self.setLuminance(img)
