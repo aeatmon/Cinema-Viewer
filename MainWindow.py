@@ -190,7 +190,7 @@ class MainWindow(QMainWindow):
 
         # Configure the slider
         default   = properties['default']
-        values    = properties['values']
+        values    = [self._formatText(x) for x in properties['values']]
         typeValue = properties['type']
         label     = properties['label']
         slider.setMinimum(0)
@@ -306,19 +306,16 @@ class MainWindow(QMainWindow):
     def _dependencies_satisfied(self, name):
         #translate the sets we use for parameters of the query
         #then call the same named method on the store
-        #TODO: using sets for everything to do options maybe make the store support it
-
-        #check ALL combinations of options
+        #TODO: using sets for everything to do options, but probably better if the store supported it
         params = []
         values = []
-        for name,vs in self._currentQuery.iteritems():
-            params.append(name)
+        for n,vs in self._currentQuery.iteritems():
+            params.append(n)
             values.append(vs)
         for element in itertools.product(*values):
             q = dict(itertools.izip(params, element))
             if self._store.dependencies_satisfied(name, q):
                 return True
-
         return False
 
     # Update enable state of all dependent widgets
@@ -478,36 +475,6 @@ class MainWindow(QMainWindow):
         # translate GUI choices (self._currentQuery) into a set of queries
         # that we need to render with
 
-        def _islayer(self, n):
-            #TODO: move to cinema_store
-            if ('islayer' in self._store.parameter_list[n] and
-                self._store.parameter_list[n]['islayer'] == 'yes'):
-                #print n, "is a layer"
-                return True
-            #print n, "is not a layer"
-            return False
-
-        def _isfield(self, n):
-            #TODO: move to cinema_store
-            if ('isfield' in self._store.parameter_list[n] and
-                self._store.parameter_list[n]['isfield'] == 'yes'):
-                return True
-            return False
-
-        def _gettype(self, n, n2):
-            #TODO: move to cinema_store
-            if 'values' in self._store.parameter_list[n] and n2 in self._store.parameter_list[n]['values']:
-                idx = self._store.parameter_list[n]['values'].index(n2)
-                ret = self._store.parameter_list[n]['types'][idx]
-                return ret
-            return 'rgb'
-
-        def _isdepender(self, n):
-            #TODO: move to cinema_store
-            if n in self._store.parameter_associations.iteritems():
-                return True
-            return False
-
         def _getfieldsfor(self, n):
             param = self._store.parameter_list[n]
             vals = param['values']
@@ -524,50 +491,48 @@ class MainWindow(QMainWindow):
                             vals2.append(v)
             return vals2
 
+        def _buildqueryfor(self, n, query):
+            if not self._store.dependencies_satisfied(n, query.dict):
+                return
+
+            if self._store.isfield(n):
+                colorcomponents = _getfieldsfor(self, n)
+                for c in colorcomponents:
+                    img_type = self._store.determine_type({n:c})
+                    query.addQuery(img_type, n, c)
+                layers.append(query)
+                return
+
+            values = self._currentQuery[n]
+            dependers = self._store.getdependers(n)
+            for v in values:
+                lquery = copy.deepcopy(query)
+                lquery.addToBaseQuery({n:v})
+                for d in dependers:
+                    _buildqueryfor(self, d, lquery)
+
         dd = self._store.parameter_list
 
-        #get query for all of the static contents (current, time, camera mostly)
+        #make query for static contents (e.g. current time and camera)
         base_query = LayerSpec.LayerSpec()
+        potentials = []
         for name in dd.keys():
-            if not _isfield(self,name) and not _islayer(self,name) and not _isdepender(self,name):
+            if (not self._store.isdepender(name) and not self._store.islayer(name)):
                 values = self._currentQuery[name]
                 v = list(iter(values))[0] #no options in query, so only 1 result not many
                 base_query.addToBaseQuery({name:v})
+            else:
+                potentials.append(name)
 
-        #add to the above queries for all of the layers (each composed of sequence of field queries)
-        #algorithm's strategy is to find fields and then back track to get required settings for their layers
-        #todo: this is brutal - find a better way
+        #add to the above queries for all of the layers
+        #each layer query is composed of sequence of field queries
         layers = []
         hasLayer = False
-        for fields_name, parameter in dd.iteritems():
-            if _isfield(self, fields_name) and self._dependencies_satisfied(fields_name):
+        for name in potentials:
+            if self._store.islayer(name) and not self._store.isdepender(name):
+                #name is a top level choice
                 hasLayer = True
-                #print "FIELDNAME", fields_name
-                layer_name = next(iter(self._store.parameter_associations[fields_name].keys()))
-                #print "LAYERNAME", layer_name
-                colorcomponents = _getfieldsfor(self,fields_name)
-                #print "COMPONENTS", colorcomponents
-
-                #find setting for layer's parent (if any). ex slice=0.5's parent object=slice
-                #todo: only one level deep on GUI end so far
-                parentQs = []
-                if layer_name in self._store.parameter_associations:
-                    for p, v in self._store.parameter_associations[layer_name].iteritems():
-                        parentQs.append({p:v}) #todo: possible that a layer could have multiple settings
-
-                values = self._currentQuery[layer_name]
-                for v in values:
-                    #print "LAYERSELECTS", layer_name, v
-                    fields = []
-                    qcopy = copy.deepcopy(base_query)
-                    for i in parentQs:
-                        qcopy.addToBaseQuery(i)
-                    qcopy.dict[layer_name] = v
-                    for c in colorcomponents:
-                        img_type = self._store.determine_type({fields_name: c})
-                        qcopy.addQuery(img_type, fields_name, c)
-                        #print "F", fields_name, c
-                    layers.append(qcopy)
+                _buildqueryfor(self, name, base_query) #recurse to find subchoices
 
         if not hasLayer:
             layers.append(base_query)
