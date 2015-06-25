@@ -393,7 +393,11 @@ class MainWindow(QMainWindow):
         if state:
             currentValues.add(parameterValue)
         else:
-            currentValues.remove(parameterValue)
+            if len(currentValues)>1:
+                currentValues.remove(parameterValue)
+            else:
+                self.sender().click() #must have at least one checked
+
         self._currentQuery[parameterName] = currentValues
 
         self._updateDependentWidgets()
