@@ -262,6 +262,7 @@ class MainWindow(QMainWindow):
            cb = QCheckBox(str(entry), self)
            cb.setObjectName(name)
            cb.value = entry
+           cb.setText(self._formatText(entry))
            if entry == properties['default']:
                cb.setChecked(True)
 
@@ -273,6 +274,35 @@ class MainWindow(QMainWindow):
     def _createParameterUI(self):
         keys = sorted(self._store.parameter_list)
         dependencies = self._store.parameter_associations
+
+        #reorder for clarity
+        #these three are the most important
+        keys2 = []
+        for special in ['time','phi','theta']:
+            if special in keys:
+                keys.remove(special)
+                keys2.append(special)
+        #any other globals
+        for name in keys:
+            if (not self._store.isdepender(name) and not self._store.isdependee(name)):
+                keys.remove(name)
+                keys2.append(name)
+        #dependencies, depth first
+        for name in keys:
+            if (not self._store.isdepender(name)):
+                keys.remove(name)
+                keys2.append(name)
+                dependers = self._store.getdependers(name)
+                while len(dependers)>0:
+                    dn = dependers.pop(0)
+                    keys.remove(dn)
+                    keys2.append(dn)
+                    subdeps = self._store.getdependers(dn)
+                    subdeps.extend(dependers)
+                    dependers = subdeps
+        if len(keys)>0:
+            raise ValueError("Well that was unexpected")
+        keys = keys2
 
         for name in keys:
             properties = self._store.parameter_list[name]
@@ -415,18 +445,10 @@ class MainWindow(QMainWindow):
 
     # Format string from number
     def _formatText(self, value):
-        try:
-            intValue = int(value)
-            return '{0}'.format(intValue)
-        except:
-            pass
-
-        try:
-            floatValue = float(value)
-            return '{0}'.format(floatValue)
-        except:
-            pass
-
+        if isinstance(value, int):
+            return '{0}'.format(value)
+        if isinstance(value, float):
+            return '{:2.4f}'.format(value)
         # String
         return value
 
